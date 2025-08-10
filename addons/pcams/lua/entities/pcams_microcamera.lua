@@ -1,0 +1,23 @@
+--leak by matveicher
+--vk group - https://vk.com/codespill
+--steam - https://steamcommunity.com/profiles/76561198968457747/
+--ds server - https://discord.gg/7XaRzQSZ45
+--ds - matveicher
+
+AddCSLuaFile()
+
+ENT.Base = "pcams_cam_base"
+
+ENT.PrintName = "Micro Camera"
+ENT.Spawnable = false
+ENT.Category = "pCams"
+ENT.Type = "anim"
+
+ENT.Model = "models/freeman/owain_microcam.mdl"
+ENT.SWEP = "pcams_deploy_microcamera"
+
+--leak by matveicher
+--vk group - https://vk.com/codespill
+--steam - https://steamcommunity.com/profiles/76561198968457747/
+--ds server - https://discord.gg/7XaRzQSZ45
+--ds - matveicher

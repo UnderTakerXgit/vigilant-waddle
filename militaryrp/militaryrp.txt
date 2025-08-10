@@ -1,0 +1,14 @@
+"militaryrp"
+{
+    "base"          "base"
+    
+    "title"         "MilitaryRP"
+    "version"       "1.0.1"
+
+    "maps"          ""
+    "menusystem"    "0"
+
+    "author_name"   "TheLovelyMask"
+    "author_email"  ""
+    "author_url"    ""
+}

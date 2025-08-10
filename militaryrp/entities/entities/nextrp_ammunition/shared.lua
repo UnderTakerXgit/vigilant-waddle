@@ -1,0 +1,11 @@
+ENT.Type = 'anim'
+ENT.Base = 'base_gmodentity'
+ENT.PrintName = 'Оружейный шкаф'
+ENT.Author = 'Kot'
+ENT.Contact = ''
+ENT.Purpose = ''
+ENT.Instructions = ''
+ENT.Spawnable = true
+ENT.AdminSpawnable = false
+ENT.Category = '!Rephyx.tech | Утилиты'
+ENT.noDrag = true 

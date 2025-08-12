@@ -1,4 +1,4 @@
--- Client: KPK (чаты, объявления с подтверждением, задачи, авто-отчёт, админ-утилиты, интеграции)
+-- Client: KPK (чаты, объявления с подтверждением, админ-утилиты, интеграции)
 NextRP = NextRP or {}
 NextRP.KPK = NextRP.KPK or {}
 local KPK = NextRP.KPK
@@ -17,8 +17,47 @@ KPK._linkCache  = KPK._linkCache or {}
 KPK._drafts     = KPK._drafts or {}
 KPK._annCounts  = KPK._annCounts or {}  -- message_id -> count
 KPK._annMine    = KPK._annMine or {}    -- message_id -> true
-KPK._tasks      = KPK._tasks or {}      -- category -> list
-KPK._mode       = KPK._mode or 'chat'   -- 'chat' | 'tasks'
+KPK._mode       = KPK._mode or 'chat'   -- только чат-режим
+KPK._reports    = KPK._reports or {}
+KPK._reportUI   = nil
+
+local REPORT_TYPES = {
+    aar = {
+        name = 'Боевой отчёт',
+        fields = {
+            { key='time_place', name='Время и место операции' },
+            { key='goal',       name='Цель' },
+            { key='team',       name='Состав группы' },
+            { key='course',     name='Ход выполнения' },
+            { key='losses',     name='Потери (личного состава, техники)' },
+            { key='contact',    name='Контакт с противником' },
+            { key='result',     name='Итог операции' },
+            { key='recs',       name='Рекомендации' }
+        }
+    },
+    med = {
+        name = 'Медицинский отчёт',
+        fields = {
+            { key='date_place', name='Дата и место инцидента' },
+            { key='fighter',    name='Имя/позывной бойца' },
+            { key='injury',     name='Характер ранения или заражения' },
+            { key='aid',        name='Оказанная помощь' },
+            { key='status',     name='Статус бойца (в строю, госпиталь, умер)' }
+        }
+    },
+    special = {
+        name = 'Специальный отчёт',
+        fields = {
+            { key='title',      name='Заголовок' },
+            { key='datetime',   name='Дата / Время' },
+            { key='author',     name='Автор' },
+            { key='place',      name='Место' },
+            { key='desc',       name='Описание', multiline=true },
+            { key='outcome',    name='Вывод / Рекомендации', multiline=true },
+            { key='priority',   name='Приоритет', combo={'Низкий','Средний','Высокий','Критический'} }
+        }
+    }
+}
 
 local function keyFor(cat, ch) return tostring(cat or '') .. '/' .. tostring(ch or '') end
 local function table_count(t) local n=0 for _ in pairs(t or {}) do n=n+1 end return n end
@@ -109,6 +148,181 @@ local function buildLinkPreview(parent, url)
     return wrap
 end
 
+-- ========== Отчётность ==========
+local function openReportForm(key)
+    local def = REPORT_TYPES[key]; if not def then return end
+    if IsValid(KPK._reportUI) then KPK._reportUI:Hide() end
+
+    local fr = TDLib('DFrame')
+    fr:SetSize(480, 600)
+    fr:Center()
+    fr:MakePopup()
+    fr:SetTitle('')
+    fr:ShowCloseButton(false)
+    fr.Paint = function(s,w,h)
+        Derma_DrawBackgroundBlur(s, s.m_fCreateTime or SysTime())
+        draw.RoundedBox(16,0,0,w,h, Color(40,43,48,230))
+    end
+    local title = TDLib('DPanel', fr) title:Dock(TOP) title:SetTall(48) title:ClearPaint()
+    title:Text(def.name, 'font_sans_24', Color(255,255,255), TEXT_ALIGN_CENTER, 0)
+
+    local scroll = TDLib('DScrollPanel', fr) scroll:Dock(FILL) scroll:ClearPaint()
+    local controls = {}
+    for _, f in ipairs(def.fields or {}) do
+        local pnl = TDLib('DPanel', scroll)
+        pnl:Dock(TOP) pnl:SetTall(f.multiline and 100 or 40) pnl:DockMargin(8,4,8,0)
+        pnl:ClearPaint()
+        local lbl = TDLib('DLabel', pnl)
+        lbl:Dock(TOP) lbl:SetTall(20) lbl:SetText(f.name or '')
+        lbl:SetFont('font_sans_18') lbl:SetTextColor(Color(255,255,255))
+        if f.combo then
+            local cb = vgui.Create('DComboBox', pnl)
+            cb:Dock(FILL)
+            for _, opt in ipairs(f.combo) do cb:AddChoice(opt) end
+            cb:SetValue(f.combo[1])
+            controls[f.key] = cb
+        else
+            local te = vgui.Create('DTextEntry', pnl)
+            te:Dock(FILL) te:SetMultiline(f.multiline and true or false)
+            controls[f.key] = te
+        end
+    end
+
+    local btnBar = TDLib('DPanel', fr) btnBar:Dock(BOTTOM) btnBar:SetTall(48) btnBar:ClearPaint()
+    local okBtn = TDLib('DButton', btnBar) okBtn:Dock(RIGHT) okBtn:SetWide(150) okBtn:DockMargin(0,8,8,8)
+    okBtn:ClearPaint(); btnNoText(okBtn)
+    okBtn.Paint = function(s,w,h) draw.RoundedBox(10,0,0,w,h, Color(88,101,242)) draw.SimpleText('Отправить','font_sans_18',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
+    okBtn.DoClick = function()
+        local payload = {}
+        for k,v in pairs(controls) do
+            if v.GetValue then payload[k] = v:GetValue() end
+        end
+        netstream.Start('KPK::Report:Create', { type=key, fields=payload })
+        fr:Close()
+        if IsValid(KPK._reportUI) then timer.Simple(0.1, function() netstream.Start('KPK::Report:List') end) end
+    end
+
+    local cancel = TDLib('DButton', btnBar) cancel:Dock(RIGHT) cancel:SetWide(120) cancel:DockMargin(0,8,8,8)
+    cancel:ClearPaint(); btnNoText(cancel)
+    cancel.Paint = function(s,w,h) draw.RoundedBox(10,0,0,w,h, Color(47,49,54)) draw.SimpleText('Отмена','font_sans_18',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
+    cancel.DoClick = function() fr:Close(); if IsValid(KPK._reportUI) then KPK._reportUI:Show() end end
+end
+
+local function openReportView(r)
+    if not istable(r) then return end
+    local def = REPORT_TYPES[r.type or '']; if not def then return end
+    local data = util.JSONToTable(r.data or '{}') or {}
+    if IsValid(KPK._reportUI) then KPK._reportUI:Hide() end
+
+    local fr = TDLib('DFrame')
+    fr:SetSize(480, 600)
+    fr:Center()
+    fr:MakePopup()
+    fr:SetTitle('')
+    fr:ShowCloseButton(false)
+    fr.Paint = function(s,w,h)
+        Derma_DrawBackgroundBlur(s, s.m_fCreateTime or SysTime())
+        draw.RoundedBox(16,0,0,w,h, Color(40,43,48,230))
+    end
+
+    local title = TDLib('DPanel', fr) title:Dock(TOP) title:SetTall(48) title:ClearPaint()
+    title:Text((def.name or '')..' #'..tostring(r.id or ''), 'font_sans_24', Color(255,255,255), TEXT_ALIGN_CENTER, 0)
+
+    local scroll = TDLib('DScrollPanel', fr) scroll:Dock(FILL) scroll:ClearPaint()
+    for _, f in ipairs(def.fields or {}) do
+        local pnl = TDLib('DPanel', scroll)
+        pnl:Dock(TOP) pnl:SetTall(0) pnl:DockMargin(8,4,8,0) pnl:ClearPaint()
+        local lbl = TDLib('DLabel', pnl)
+        lbl:Dock(TOP) lbl:SetTall(20) lbl:SetText(f.name or '')
+        lbl:SetFont('font_sans_18') lbl:SetTextColor(Color(255,255,255))
+        local val = tostring(data[f.key] or '')
+        local text = vgui.Create('DLabel', pnl)
+        text:Dock(TOP)
+        text:SetFont('font_sans_18') text:SetTextColor(Color(200,200,200))
+        text:SetWrap(true) text:SetAutoStretchVertical(true)
+        text:SetText(val)
+        text:SetWide(scroll:GetWide()-16)
+        text:SizeToContentsY()
+        pnl:SetTall(text:GetTall() + 24)
+    end
+
+    local btnBar = TDLib('DPanel', fr) btnBar:Dock(BOTTOM) btnBar:SetTall(48) btnBar:ClearPaint()
+    local close = TDLib('DButton', btnBar) close:Dock(RIGHT) close:SetWide(120) close:DockMargin(0,8,8,8)
+    close:ClearPaint(); btnNoText(close)
+    close.Paint = function(s,w,h) draw.RoundedBox(10,0,0,w,h, Color(47,49,54)) draw.SimpleText('Закрыть','font_sans_18',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
+    close.DoClick = function() fr:Close(); if IsValid(KPK._reportUI) then KPK._reportUI:Show() end end
+end
+
+local function buildReportsWindow()
+    if IsValid(KPK._reportUI) then KPK._reportUI:Remove() end
+    local sw, sh = ScrW(), ScrH()
+    local frame = TDLib('DFrame')
+    frame:SetSize(math.min(800, sw*0.8), math.min(600, sh*0.8))
+    frame:Center()
+    frame:MakePopup()
+    frame:SetTitle('')
+    frame:ShowCloseButton(false)
+    frame.Paint = function(s,w,h)
+        Derma_DrawBackgroundBlur(s, s.m_fCreateTime or SysTime())
+        draw.RoundedBox(16,0,0,w,h, Color(40,43,48,230))
+    end
+    frame.OnRemove = function() KPK._reportUI = nil end
+    KPK._reportUI = frame
+
+    local title = TDLib('DPanel', frame) title:Dock(TOP) title:SetTall(52) title:ClearPaint()
+    title:Text('Отчётность', 'font_sans_24', Color(255,255,255), TEXT_ALIGN_LEFT, 10)
+
+    local createBtn = TDLib('DButton', title)
+    createBtn:Dock(RIGHT) createBtn:SetWide(160) createBtn:DockMargin(0,8,8,8)
+    createBtn:ClearPaint(); btnNoText(createBtn)
+    createBtn.Paint = function(s,w,h) draw.RoundedBox(10,0,0,w,h, Color(88,101,242)) draw.SimpleText('Создать отчёт','font_sans_18',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
+    createBtn.DoClick = function()
+        local menu = DermaMenu()
+        for k, v in pairs(REPORT_TYPES) do
+            menu:AddOption(v.name, function() openReportForm(k) end)
+        end
+        menu:Open()
+    end
+
+    local scroll = TDLib('DScrollPanel', frame)
+    scroll:Dock(FILL) scroll:ClearPaint()
+
+    for _, r in ipairs(KPK._reports or {}) do
+        local data = util.JSONToTable(r.data or '{}') or {}
+        local pnl = TDLib('DPanel', scroll)
+        pnl:Dock(TOP) pnl:SetTall(64) pnl:DockMargin(8,4,8,0)
+        pnl:ClearPaint()
+        pnl.Paint = function(s,w,h) draw.RoundedBox(10,0,0,w,h, Color(47,49,54)) end
+        local ttl = REPORT_TYPES[r.type or ''] and REPORT_TYPES[r.type or ''].name or (r.type or '')
+        local sub = ''
+        if r.type == 'special' then sub = data.title or ''
+        elseif r.type == 'aar' then sub = data.goal or ''
+        elseif r.type == 'med' then sub = data.fighter or '' end
+        pnl:Text((ttl or '')..' #'..tostring(r.id or ''), 'font_sans_18', Color(255,255,255), TEXT_ALIGN_LEFT, 10)
+        local subp = TDLib('DLabel', pnl)
+        subp:Dock(BOTTOM) subp:SetTall(20) subp:DockMargin(10,0,10,6)
+        subp:SetFont('font_sans_16') subp:SetTextColor(Color(200,200,200))
+        subp:SetText(truncate(sub, 80))
+        local view = TDLib('DButton', pnl) view:Dock(RIGHT) view:SetWide(120) view:DockMargin(0,12,12,12)
+        view:ClearPaint(); btnNoText(view)
+        view.Paint = function(s,w,h) draw.RoundedBox(8,0,0,w,h, Color(88,101,242)) draw.SimpleText('Просмотреть','font_sans_16',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
+        view.DoClick = function() openReportView(r) end
+    end
+end
+
+local function OpenReports()
+    netstream.Start('KPK::Report:List')
+end
+
+netstream.Hook('KPK::Report:List:OK', function(r)
+    KPK._reports = r.reports or {}
+    buildReportsWindow()
+end)
+
+netstream.Hook('KPK::Report:Get:OK', function(r)
+    if r and r.report then openReportView(r.report) end
+end)
+
 -- ===================================
 
 local function OpenKPK()
@@ -181,6 +395,15 @@ netstream.Hook('KPK::Bootstrap:OK', function(payload)
 
     local catsScroll = TDLib('DScrollPanel', left) catsScroll:Dock(FILL) catsScroll:ClearPaint()
 
+    -- кнопка отчётности
+    local reportBar = TDLib('DPanel', left) reportBar:Dock(BOTTOM) reportBar:SetTall(52) reportBar:ClearPaint()
+    local reportBtn = TDLib('DButton', reportBar) reportBtn:Dock(FILL) reportBtn:DockMargin(8,8,8,0) reportBtn:ClearPaint(); btnNoText(reportBtn)
+    reportBtn.Paint = function(s,w,h)
+        draw.RoundedBox(10,0,0,w,h, Color(48,51,57))
+        draw.SimpleText('📄  Отчётность', 'font_sans_18', w/2, h/2, Color(255,255,255), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+    end
+    reportBtn.DoClick = OpenReports
+
     -- нижняя «шестерёнка» (инструменты/интеграции)
     local gearBar = TDLib('DPanel', left) gearBar:Dock(BOTTOM) gearBar:SetTall(52) gearBar:ClearPaint()
     local gearBtn = TDLib('DButton', gearBar) gearBtn:Dock(FILL) gearBtn:DockMargin(8,8,8,8) gearBtn:ClearPaint(); btnNoText(gearBtn)
@@ -196,49 +419,7 @@ netstream.Hook('KPK::Bootstrap:OK', function(payload)
     local title = TDLib('DPanel', right) title:Dock(TOP) title:SetTall(64) title:ClearPaint()
     title:Text('КПК', 'font_sans_24', Color(255,255,255), TEXT_ALIGN_LEFT, 10)
 
-    -- Переключатель режимов: Чаты / Задачи
-    local modeTabs = TDLib('DPanel', title) modeTabs:Dock(RIGHT) modeTabs:SetWide(240) modeTabs:ClearPaint()
-    local function mkTab(txt, val)
-        local b = TDLib('DButton', modeTabs) b:Dock(LEFT) b:SetWide(120) b:DockMargin(8,10,0,10) b:ClearPaint(); btnNoText(b)
-        b.Paint = function(s,w,h)
-            local on = (KPK._mode == val)
-            draw.RoundedBox(10,0,0,w,h, on and Color(88,101,242) or Color(60,63,68))
-            draw.SimpleText(txt, 'font_sans_18', w/2, h/2, Color(255,255,255), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
-        end
-        b.DoClick = function()
-            KPK._mode = val
-            if val == 'tasks' then
-                if KPK._active then netstream.Start('KPK::Tasks:List', { category = KPK._active.cat }) end
-            end
-            right:InvalidateLayout(true)
-        end
-        return b
-    end
-    local tabChat  = mkTab('Чаты','chat')
-    local tabTasks = mkTab('Задачи','tasks')
-
     -- ====== Интеграции ======
-    local function openAutoReportDialog()
-        if not (KPK._active and KPK._active.ch == 'reports') then
-            notification.AddLegacy('Авто-отчёт доступен только в канале "Отчётность".', NOTIFY_HINT, 3)
-            surface.PlaySound('buttons/button15.wav')
-            return
-        end
-        local fr = vgui.Create('DFrame') fr:SetTitle('Авто-отчёт по смене') fr:SetSize(520, 460) fr:Center() fr:MakePopup()
-        local s1 = vgui.Create('DTextEntry', fr) s1:SetPos(12,36)  s1:SetSize(496,28)  s1:SetText('Начало (напр. 10:00)')
-        local s2 = vgui.Create('DTextEntry', fr) s2:SetPos(12,68)  s2:SetSize(496,28)  s2:SetText('Окончание (напр. 18:00)')
-        local s3 = vgui.Create('DTextEntry', fr) s3:SetPos(12,100) s3:SetSize(496,320) s3:SetMultiline(true) s3:SetText('Краткий отчёт: …')
-        local ok = vgui.Create('DButton', fr)  ok:SetPos(12,430) ok:SetSize(496,24) ok:SetText('Опубликовать')
-        ok.DoClick = function()
-            local a = string.Trim(s1:GetValue() or '')
-            local b = string.Trim(s2:GetValue() or '')
-            local c = string.Trim(s3:GetValue() or '')
-            if c == '' then return end
-            netstream.Start('KPK::Reports:AutoPost', { category=KPK._active.cat, channel='reports', start_text=a, end_text=b, body=c })
-            fr:Close()
-        end
-    end
-
     local function openCreateAnnounceDialog()
         if not KPK._active then return end
         Derma_StringRequest('Служебное объявление', 'Введите текст объявления (оно получит кнопку «Прочитал»):', '', function(txt)
@@ -250,24 +431,6 @@ netstream.Hook('KPK::Bootstrap:OK', function(payload)
                 text     = txt
             })
         end)
-    end
-
-    local function openTasksCreateDialog(category)
-        local fr = vgui.Create('DFrame') fr:SetTitle('Новая задача') fr:SetSize(460, 420) fr:Center() fr:MakePopup()
-        local t1 = vgui.Create('DTextEntry', fr) t1:SetPos(12,36) t1:SetSize(436,28)  t1:SetText('Заголовок')
-        local t2 = vgui.Create('DTextEntry', fr) t2:SetPos(12,68) t2:SetSize(436,230) t2:SetMultiline(true) t2:SetText('Описание')
-        local t3 = vgui.Create('DTextEntry', fr) t3:SetPos(12,304) t3:SetSize(216,28) t3:SetText('SteamID исполнителя (опц.)')
-        local t4 = vgui.Create('DTextEntry', fr) t4:SetPos(232,304) t4:SetSize(216,28) t4:SetText('Дедлайн UNIX (опц.)')
-        local ok = vgui.Create('DButton', fr) ok:SetPos(12,340) ok:SetSize(436,28) ok:SetText('Создать')
-        ok.DoClick = function()
-            local title = string.Trim(t1:GetValue() or '')
-            local desc  = string.Trim(t2:GetValue() or '')
-            local sid   = string.Trim(t3:GetValue() or '')
-            local dl    = tonumber(t4:GetValue() or 0) or 0
-            if title == '' then return end
-            netstream.Start('KPK::Tasks:Create', { category=category, title=title, description=desc, assignee_sid=sid, deadline=dl })
-            fr:Close()
-        end
     end
 
     local function openIntegrationsMenu()
@@ -283,14 +446,6 @@ netstream.Hook('KPK::Bootstrap:OK', function(payload)
                 if id > 0 then netstream.Start('KPK::Announce:List', { message_id = id }) end
             end)
         end):SetIcon('icon16/group.png')
-
-        local tmenu = menu:AddSubMenu('Задачи и отчётность')
-        tmenu:AddOption('Открыть задачи категории', function()
-            KPK._mode = 'tasks'
-            netstream.Start('KPK::Tasks:List', { category = cat })
-        end):SetIcon('icon16/table.png')
-        tmenu:AddOption('Создать задачу…', function() openTasksCreateDialog(cat) end):SetIcon('icon16/add.png')
-        tmenu:AddOption('Авто-отчёт по смене…', function() openAutoReportDialog() end):SetIcon('icon16/report.png')
 
         menu:AddSpacer()
 
@@ -523,6 +678,10 @@ netstream.Hook('KPK::Bootstrap:OK', function(payload)
             body:SetWrap(true)
             body:SetAutoStretchVertical(true)
             body:SetText(tostring(p.content or ''))
+            body:SetWide(card:GetWide() - 24)
+            card.OnSizeChanged = function(_, w)
+                if IsValid(body) then body:SetWide(w - 24) end
+            end
 
             -- предпросмотр ссылки (если есть)
             local url = extractFirstUrl(tostring(p.content or ""))
@@ -603,6 +762,25 @@ netstream.Hook('KPK::Bootstrap:OK', function(payload)
             return row
         end
         -- ===== конец особого вида =====
+
+        if tostring(p.channel or '') == 'reports' then
+            local meta = util.JSONToTable(p.content or '{}') or {}
+            local def = REPORT_TYPES[meta.type or ''] or {}
+            local row = TDLib('DPanel', list) row:Dock(TOP) row:SetTall(40) row:DockMargin(10,8,10,0) row:ClearPaint()
+            if animated then row:SetAlpha(0) row:AlphaTo(255, 0.18, 0, nil) end
+            row._msg = p
+            row.Paint = function(s,w,h) draw.RoundedBox(8,0,0,w,h, Color(47,49,54)) end
+            local label = TDLib('DLabel', row) label:Dock(FILL) label:DockMargin(8,0,0,0)
+            local stamp = os.date('%d.%m %H:%M', tonumber(p.created_at or 0))
+            label:SetFont('font_sans_18') label:SetTextColor(Color(230,230,230))
+            label:SetText('['..stamp..'] '..tostring(def.name or meta.type or '')..' #'..tostring(meta.id or ''))
+            local btn = TDLib('DButton', row) btn:Dock(RIGHT) btn:SetWide(130) btn:DockMargin(8,8,8,8)
+            btn:ClearPaint(); btnNoText(btn)
+            btn.Paint = function(s,w,h) draw.RoundedBox(8,0,0,w,h, Color(88,101,242)) draw.SimpleText('Просмотреть','font_sans_16',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
+            btn.DoClick = function() netstream.Start('KPK::Report:Get', { id = tonumber(meta.id or 0) }) end
+            row:SizeToChildren(false, true)
+            return row
+        end
 
         -- обычные сообщения
         local row = TDLib('DPanel', list) row:Dock(TOP) row:SetTall(0) row:ClearPaint() row:DockMargin(10,8,10,0)
@@ -1003,106 +1181,6 @@ netstream.Hook('KPK::Bootstrap:OK', function(payload)
         if (def.channels or {})[1] then load(catId, def.channels[1].key) break end
     end
 
-    -- ===== Режим «Задачи» =====
-    local function renderTasks(category, tasks)
-        list:Clear()
-        pinBar:Clear()
-
-        local top = TDLib('DPanel', pinBar) top:Dock(FILL) top:ClearPaint()
-        local canManage = payload.profile and payload.profile.is_admin_like
-
-        local createBtn = TDLib('DButton', top)
-        createBtn:Dock(LEFT) createBtn:SetWide(170) createBtn:DockMargin(10,8,10,8) createBtn:ClearPaint(); btnNoText(createBtn)
-        createBtn.Paint = function(s,w,h)
-            draw.RoundedBox(10,0,0,w,h, Color(88,101,242))
-            draw.SimpleText('Создать задачу', 'font_sans_18', w/2, h/2, Color(255,255,255), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
-        end
-        createBtn:SetVisible(canManage)
-        createBtn.DoClick = function()
-            openTasksCreateDialog(category)
-        end
-
-        local canvas = vgui.Create('DIconLayout', list)
-        canvas:Dock(FILL) canvas:SetSpaceX(10) canvas:SetSpaceY(10)
-        local function addCard(t)
-            local pnl = vgui.Create('DPanel', canvas) pnl:SetSize(380, 170)
-            pnl.Paint = function(s,w,h) draw.RoundedBox(12,0,0,w,h, Color(47,49,54)) end
-            local ttl = vgui.Create('DLabel', pnl) ttl:SetPos(12,10) ttl:SetSize(356, 24) ttl:SetFont('font_sans_21')
-            ttl:SetText(t.title or ('Задача #'..tostring(t.id)))
-            local who = vgui.Create('DLabel', pnl) who:SetPos(12,38) who:SetSize(356,20) who:SetFont('font_sans_16')
-            local ass = t.assignee_name ~= '' and t.assignee_name or (t.assignee_sid or 'не назначен')
-            who:SetText('Исполнитель: '..(ass or '—'))
-            local st  = vgui.Create('DLabel', pnl) st:SetPos(12,60) st:SetSize(356,20) st:SetFont('font_sans_16')
-            st:SetText('Статус: '..(t.status or 'open'))
-            local dl  = vgui.Create('DLabel', pnl) dl:SetPos(12,82) dl:SetSize(356,20) dl:SetFont('font_sans_16')
-            dl:SetText('Дедлайн: '..(tonumber(t.deadline or 0) > 0 and os.date('%d.%m %H:%M', tonumber(t.deadline)) or '—'))
-
-            local bRow = vgui.Create('DPanel', pnl) bRow:SetPos(10, 110) bRow:SetSize(360, 44); bRow.Paint = function() end
-            local function mkBtn(name, cb)
-                local b = vgui.Create('DButton', bRow) b:SetSize(110, 32); b:SetText('')
-                b.Paint = function(s,w,h) draw.RoundedBox(10,0,0,w,h, Color(64,68,75)); draw.SimpleText(name,'font_sans_16',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
-                b.DoClick = cb
-                return b
-            end
-
-            local meIsAssignee = (t.assignee_sid or '') == LocalPlayer():SteamID()
-            local amAdmin = isAdminLike
-            local x = 0
-            local function place(b) b:SetPos(x, 6); x = x + 118 end
-
-            if amAdmin then place(mkBtn('Назначить себя', function()
-                netstream.Start('KPK::Tasks:Update', { id=t.id, assignee_sid=LocalPlayer():SteamID() })
-            end)) end
-
-            if (meIsAssignee or amAdmin) then
-                place(mkBtn('В работе', function() netstream.Start('KPK::Tasks:Update', { id=t.id, status='in_progress' }) end))
-                place(mkBtn('Готово',    function() netstream.Start('KPK::Tasks:Update', { id=t.id, status='done' }) end))
-            end
-
-            if amAdmin then
-                place(mkBtn('Удалить', function()
-                    Derma_Query('Точно удалить задачу #'..tostring(t.id)..' ?', 'Подтверждение',
-                        'Да', function() netstream.Start('KPK::Tasks:Delete', { id=t.id }) end,
-                        'Отмена')
-                end))
-            end
-
-            return pnl
-        end
-
-        for _, t in ipairs(tasks or {}) do addCard(t) end
-    end
-
-    -- ===== NET-хуки: задачи =====
-    netstream.Hook('KPK::Tasks:List:OK', function(r)
-        if not (IsValid(KPK.UI) and KPK._mode == 'tasks') then return end
-        if not KPK._active or r.category ~= KPK._active.cat then return end
-        KPK._tasks[r.category] = r.tasks or {}
-        renderTasks(r.category, KPK._tasks[r.category])
-    end)
-
-    netstream.Hook('KPK::Tasks:Updated', function(r)
-        if KPK._active and KPK._mode == 'tasks' and r.category == KPK._active.cat then
-            netstream.Start('KPK::Tasks:List', { category = KPK._active.cat })
-        end
-    end)
-
-    -- ===== Быстрая кнопка авто-отчёта =====
-    local reportBtn = TDLib('DButton', title)
-    reportBtn:Dock(RIGHT) reportBtn:SetWide(170) reportBtn:DockMargin(0,10,10,10) reportBtn:ClearPaint(); btnNoText(reportBtn)
-    reportBtn.Paint = function(s,w,h)
-        local show = (KPK._mode == 'chat' and KPK._active and KPK._active.ch == 'reports')
-        if not show then return end
-        draw.RoundedBox(10,0,0,w,h, Color(88,101,242))
-        draw.SimpleText('Авто-отчёт', 'font_sans_18', w/2, h/2, Color(255,255,255), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
-    end
-    reportBtn.DoClick = function() openAutoReportDialog() end
-
-    -- Видимость ряда элементов
-    right.Think = function()
-        inputRow:SetVisible(KPK._mode == 'chat')
-        replyBar:SetVisible(KPK._mode == 'chat')
-    end
 end)
 
 concommand.Add('kpk_open', OpenKPK)

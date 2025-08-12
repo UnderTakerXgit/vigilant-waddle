@@ -454,6 +454,10 @@ netstream.Hook('KPK::Bootstrap:OK', function(payload)
             body:SetWrap(true)
             body:SetAutoStretchVertical(true)
             body:SetText(tostring(p.content or ''))
+            body:SetWide(card:GetWide() - 24)
+            card.OnSizeChanged = function(_, w)
+                if IsValid(body) then body:SetWide(w - 24) end
+            end
 
             -- предпросмотр ссылки (если есть)
             local url = extractFirstUrl(tostring(p.content or ""))

@@ -1,4 +1,4 @@
--- Server: KPK (чаты, объявления с подтверждением, задачи, авто-отчёт, утилиты, закреп)
+-- Server: KPK (чаты, объявления с подтверждением, утилиты, закреп)
 NextRP = NextRP or {}
 NextRP.KPK = NextRP.KPK or {}
 local KPK  = NextRP.KPK
@@ -53,28 +53,10 @@ local function createTables()
         );
     ]])
 
-    -- Задачи
-    MySQLite.query([[
-        CREATE TABLE IF NOT EXISTS kpk_tasks(
-            id ]]..idCol..[[,
-            category     VARCHAR(16),
-            title        TEXT,
-            description  TEXT,
-            creator_sid  VARCHAR(25),
-            assignee_sid VARCHAR(25),
-            status       VARCHAR(16),
-            deadline     INT,
-            created_at   INT,
-            closed_at    INT
-        );
-    ]])
-
     -- Индексы
     MySQLite.query([[CREATE INDEX IF NOT EXISTS idx_kpk_messages_cat_ch_id ON kpk_messages(category, channel, id);]])
     MySQLite.query([[CREATE INDEX IF NOT EXISTS idx_kpk_messages_created_at ON kpk_messages(created_at);]])
     MySQLite.query([[CREATE INDEX IF NOT EXISTS idx_kpk_messages_reply_to ON kpk_messages(reply_to);]])
-    MySQLite.query([[CREATE INDEX IF NOT EXISTS idx_kpk_tasks_cat ON kpk_tasks(category);]])
-    MySQLite.query([[CREATE INDEX IF NOT EXISTS idx_kpk_tasks_status ON kpk_tasks(status);]])
 end
 
 local function ensureColumns()
@@ -115,7 +97,6 @@ hook.Add('DatabaseInitialized', 'KPK::InitDB', function()
         local days = (CFG().retention_days or 30)
         local threshold = now() - (days * 24 * 3600)
         MySQLite.query('DELETE FROM kpk_messages WHERE created_at < '..threshold..';')
-        -- задачи не чистим автоматически
     end)
 end)
 
@@ -628,129 +609,4 @@ netstream.Hook('KPK::Pin:Clear', function(ply, data)
     end)
 end)
 
--- === ЗАДАЧИ ===
-local function canManageTasks(ply, cat)
-    if not NextRP.KPK.CanSeeCategory(ply, cat) then return false end
-    if isAdminLike(ply) then return true end
-    local catDef = (CFG().categories or {})[cat]
-    if not catDef then return false end
-    local reportsCh
-    for _, ch in ipairs(catDef.channels or {}) do if ch.key == 'reports' then reportsCh = ch break end end
-    if reportsCh then return NextRP.KPK.CanPinInChannel(ply, cat, reportsCh) end
-    return false
-end
-
-netstream.Hook('KPK::Tasks:List', function(ply, data)
-    if not istable(data) then return end
-    local cat = tostring(data.category or '')
-    if cat == '' or not NextRP.KPK.CanSeeCategory(ply, cat) then return end
-
-    MySQLite.query('SELECT * FROM kpk_tasks WHERE category='..MySQLite.SQLStr(cat)..' ORDER BY (status!="done"), deadline ASC NULLS LAST, id DESC;', function(rows)
-        rows = rows or {}
-        local names = {}
-        for _, pl in ipairs(player.GetAll()) do names[pl:SteamID()] = pl:GetNVar('nrp_fullname') or pl:Nick() end
-        for _, r in ipairs(rows) do
-            r.assignee_name = (r.assignee_sid and names[r.assignee_sid]) or r.assignee_sid or ''
-            r.creator_name  = (r.creator_sid and names[r.creator_sid]) or r.creator_sid or ''
-        end
-        netstream.Start(ply, 'KPK::Tasks:List:OK', { category = cat, tasks = rows })
-    end)
-end)
-
-netstream.Hook('KPK::Tasks:Create', function(ply, data)
-    if not istable(data) then return end
-    local cat = tostring(data.category or '')
-    local title = tostring(data.title or '')
-    local desc  = tostring(data.description or '')
-    local assignee = tostring(data.assignee_sid or '')
-    local deadline = tonumber(data.deadline or 0) or 0
-    if cat=='' or title=='' then return end
-    if not canManageTasks(ply, cat) then return end
-
-    local sql = string.format(
-        "INSERT INTO kpk_tasks(category,title,description,creator_sid,assignee_sid,status,deadline,created_at,closed_at) VALUES(%s,%s,%s,%s,%s,%s,%d,%d,NULL);",
-        MySQLite.SQLStr(cat), MySQLite.SQLStr(string.sub(title,1,200)),
-        MySQLite.SQLStr(string.sub(desc,1,2000)),
-        MySQLite.SQLStr(ply:SteamID()), (assignee ~= '' and MySQLite.SQLStr(assignee) or "NULL"),
-        MySQLite.SQLStr('open'), deadline, now()
-    )
-    MySQLite.query(sql, function()
-        local qlast = MySQLite.isMySQL() and 'SELECT LAST_INSERT_ID() as id;' or 'SELECT last_insert_rowid() as id;'
-        MySQLite.query(qlast, function(r)
-            local id = r and r[1] and tonumber(r[1].id) or 0
-            broadcastToCategory(cat, 'KPK::Tasks:Updated', { category=cat, action='create', id=id })
-        end)
-    end)
-end)
-
-netstream.Hook('KPK::Tasks:Update', function(ply, data)
-    if not istable(data) then return end
-    local id = tonumber(data.id or 0) or 0
-    if id<=0 then return end
-    MySQLite.query('SELECT * FROM kpk_tasks WHERE id='..id..' LIMIT 1;', function(rows)
-        local t = rows and rows[1]; if not t then return end
-        local cat = tostring(t.category or '')
-        if not NextRP.KPK.CanSeeCategory(ply, cat) then return end
-
-        local fields = {}
-        local admin = canManageTasks(ply, cat)
-        local isAssignee = (t.assignee_sid or '') == ply:SteamID()
-        local st = tostring(data.status or '')
-        if st ~= '' and (isAssignee or admin) then fields[#fields+1] = "status="..MySQLite.SQLStr(st) end
-
-        if admin then
-            if data.assignee_sid ~= nil then
-                if data.assignee_sid == '' then fields[#fields+1] = "assignee_sid=NULL"
-                else fields[#fields+1] = "assignee_sid="..MySQLite.SQLStr(tostring(data.assignee_sid)) end
-            end
-            if data.title then fields[#fields+1] = "title="..MySQLite.SQLStr(string.sub(tostring(data.title),1,200)) end
-            if data.description then fields[#fields+1] = "description="..MySQLite.SQLStr(string.sub(tostring(data.description),1,2000)) end
-            if data.deadline ~= nil then
-                local dl = tonumber(data.deadline or 0) or 0
-                fields[#fields+1] = "deadline="..tostring(dl)
-            end
-        end
-
-        if #fields == 0 then return end
-        local sql = 'UPDATE kpk_tasks SET '..table.concat(fields, ',')..' WHERE id='..id..';'
-        MySQLite.query(sql, function()
-            broadcastToCategory(cat, 'KPK::Tasks:Updated', { category=cat, action='update', id=id })
-        end)
-    end)
-end)
-
-netstream.Hook('KPK::Tasks:Delete', function(ply, data)
-    if not istable(data) then return end
-    local id = tonumber(data.id or 0) or 0
-    if id<=0 then return end
-    MySQLite.query('SELECT category FROM kpk_tasks WHERE id='..id..' LIMIT 1;', function(rows)
-        local t = rows and rows[1]; if not t then return end
-        local cat = tostring(t.category or '')
-        if not canManageTasks(ply, cat) then return end
-        MySQLite.query('DELETE FROM kpk_tasks WHERE id='..id..';', function()
-            broadcastToCategory(cat, 'KPK::Tasks:Updated', { category=cat, action='delete', id=id })
-        end)
-    end)
-end)
-
--- === АВТО-ОТЧЁТ ПО СМЕНЕ ===
-netstream.Hook('KPK::Reports:AutoPost', function(ply, data)
-    if not istable(data) then return end
-    local cat = tostring(data.category or '')
-    local ch  = tostring(data.channel or 'reports')
-    local startt = tostring(data.start_text or '')
-    local endt   = tostring(data.end_text or '')
-    local body   = tostring(data.body or '')
-    if cat=='' or ch=='' or body=='' then return end
-    local chDef = findChannelDef(cat, ch); if not chDef then return end
-    if not NextRP.KPK.CanPostToChannel(ply, cat, chDef) then return end
-
-    local header = string.format("[ОТЧЁТ ПО СМЕНЕ]\nСмена: %s — %s\nИсполнитель: %s (%s)\n---\n%s",
-        startt ~= '' and startt or 'не указано',
-        endt   ~= '' and endt   or 'не указано',
-        ply:GetNVar('nrp_fullname') or ply:Nick(),
-        ply:SteamID(),
-        body
-    )
-    netstream.Hook('KPK::Post')(ply, { category=cat, channel=ch, text=header })
-end)
+-- (функционал задач и авто-отчётов удалён)

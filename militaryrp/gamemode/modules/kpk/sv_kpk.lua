@@ -58,6 +58,7 @@ local function createTables()
             id ]]..idCol..[[,
             type VARCHAR(16),
             steam_id VARCHAR(25),
+            category VARCHAR(16),
             data TEXT,
             created_at INT
         );
@@ -94,6 +95,7 @@ local function ensureColumns()
     addcol('kpk_messages', 'reply_to', 'INT')
     addcol('kpk_messages', 'edited_at', 'INT')
     addcol('kpk_messages', 'is_announce', 'INT DEFAULT 0')
+    addcol('kpk_reports', 'category', 'VARCHAR(16)')
 end
 
 hook.Add('DatabaseInitialized', 'KPK::InitDB', function()
@@ -173,6 +175,16 @@ end
 -- === Bootstrap ===
 netstream.Hook('KPK::Bootstrap', function(ply)
     local cats = getVisibleCategoriesFor(ply)
+    for _, def in pairs(cats) do
+        def.channels = def.channels or {}
+        local has = false
+        for _, ch in ipairs(def.channels) do
+            if ch.key == 'reports' then has = true break end
+        end
+        if not has then
+            table.insert(def.channels, { key = 'reports', name = 'Отчётность', post = 'none' })
+        end
+    end
 
     local acl = {}
     for catId, def in pairs(cats) do
@@ -621,6 +633,10 @@ end)
 
 -- (функционал задач и авто-отчётов удалён)
 
+-- === ОТЧЁТЫ ===
+netstream.Hook('KPK::Report:List', function(ply)
+    local cat = NextRP.KPK.GetPlayerJobId and NextRP.KPK.GetPlayerJobId(ply) or ''
+    MySQLite.query('SELECT id,type,steam_id,data,created_at FROM kpk_reports WHERE category='..MySQLite.SQLStr(cat)..' ORDER BY id DESC LIMIT 50;', function(rows)
 
 -- === ОТЧЁТЫ ===
 netstream.Hook('KPK::Report:List', function(ply)
@@ -633,6 +649,51 @@ netstream.Hook('KPK::Report:Create', function(ply, data)
     if not istable(data) then return end
     local t = tostring(data.type or '')
     if t == '' then return end
+    local cat = NextRP.KPK.GetPlayerJobId and NextRP.KPK.GetPlayerJobId(ply) or ''
+    if cat == '' then return end
+    local payload = util.TableToJSON(data.fields or {}, true)
+    local ts = now()
+    MySQLite.query(string.format(
+        "INSERT INTO kpk_reports(type,steam_id,category,data,created_at) VALUES(%s,%s,%s,%s,%d);",
+        MySQLite.SQLStr(t),
+        MySQLite.SQLStr(ply:SteamID()),
+        MySQLite.SQLStr(cat),
+        MySQLite.SQLStr(payload),
+        ts
+    ), function()
+        local qlast = MySQLite.isMySQL() and 'SELECT LAST_INSERT_ID() as id;' or 'SELECT last_insert_rowid() as id;'
+        MySQLite.query(qlast, function(r)
+            local rid = r and r[1] and tonumber(r[1].id) or 0
+            local steam = MySQLite.SQLStr(ply:SteamID())
+            local cid   = tonumber(ply:GetNVar('nrp_charid')) or 0
+            local msgContent = util.TableToJSON({ id=rid, type=t }, true)
+            local ins = string.format(
+                "INSERT INTO kpk_messages(category, channel, steam_id, char_id, content, created_at, reply_to, edited_at, is_announce) VALUES(%s,%s,%s,%d,%s,%d,NULL,NULL,0);",
+                MySQLite.SQLStr(cat), MySQLite.SQLStr('reports'), steam, cid, MySQLite.SQLStr(msgContent), ts
+            )
+            MySQLite.query(ins, function()
+                local ql = MySQLite.isMySQL() and 'SELECT LAST_INSERT_ID() as id;' or 'SELECT last_insert_rowid() as id;'
+                MySQLite.query(ql, function(rr)
+                    local mid = rr and rr[1] and tonumber(rr[1].id) or 0
+                    broadcastToCategory(cat, 'KPK::Post:New', {
+                        category = cat, channel = 'reports',
+                        row = { id = mid, category = cat, channel = 'reports', steam_id = ply:SteamID(), char_id = cid, content = msgContent, created_at = ts, reply_to = nil, reply_content = nil, reply_steam_id = nil, reply_created_at = nil, edited_at = nil, is_announce = 0 }
+                    })
+                end)
+            end)
+            netstream.Start(ply, 'KPK::Report:Create:OK')
+        end)
+    end)
+end)
+
+netstream.Hook('KPK::Report:Get', function(ply, data)
+    local id = tonumber(data and data.id or 0) or 0
+    if id <= 0 then return end
+    local cat = NextRP.KPK.GetPlayerJobId and NextRP.KPK.GetPlayerJobId(ply) or ''
+    MySQLite.query('SELECT id,type,steam_id,category,data,created_at FROM kpk_reports WHERE id='..id..' AND category='..MySQLite.SQLStr(cat)..' LIMIT 1;', function(rows)
+        netstream.Start(ply, 'KPK::Report:Get:OK', { report = rows and rows[1] or nil })
+    end)
+end)
     local payload = util.TableToJSON(data.fields or {}, true)
     MySQLite.query(string.format(
         "INSERT INTO kpk_reports(type,steam_id,data,created_at) VALUES(%s,%s,%s,%d);",

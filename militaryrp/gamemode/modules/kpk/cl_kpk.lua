@@ -208,6 +208,52 @@ local function openReportForm(key)
     cancel.DoClick = function() fr:Close(); if IsValid(KPK._reportUI) then KPK._reportUI:Show() end end
 end
 
+
+local function openReportView(r)
+    if not istable(r) then return end
+    local def = REPORT_TYPES[r.type or '']; if not def then return end
+    local data = util.JSONToTable(r.data or '{}') or {}
+    if IsValid(KPK._reportUI) then KPK._reportUI:Hide() end
+
+    local fr = TDLib('DFrame')
+    fr:SetSize(480, 600)
+    fr:Center()
+    fr:MakePopup()
+    fr:SetTitle('')
+    fr:ShowCloseButton(false)
+    fr.Paint = function(s,w,h)
+        Derma_DrawBackgroundBlur(s, s.m_fCreateTime or SysTime())
+        draw.RoundedBox(16,0,0,w,h, Color(40,43,48,230))
+    end
+
+    local title = TDLib('DPanel', fr) title:Dock(TOP) title:SetTall(48) title:ClearPaint()
+    title:Text((def.name or '')..' #'..tostring(r.id or ''), 'font_sans_24', Color(255,255,255), TEXT_ALIGN_CENTER, 0)
+
+    local scroll = TDLib('DScrollPanel', fr) scroll:Dock(FILL) scroll:ClearPaint()
+    for _, f in ipairs(def.fields or {}) do
+        local pnl = TDLib('DPanel', scroll)
+        pnl:Dock(TOP) pnl:SetTall(0) pnl:DockMargin(8,4,8,0) pnl:ClearPaint()
+        local lbl = TDLib('DLabel', pnl)
+        lbl:Dock(TOP) lbl:SetTall(20) lbl:SetText(f.name or '')
+        lbl:SetFont('font_sans_18') lbl:SetTextColor(Color(255,255,255))
+        local val = tostring(data[f.key] or '')
+        local text = vgui.Create('DLabel', pnl)
+        text:Dock(TOP)
+        text:SetFont('font_sans_18') text:SetTextColor(Color(200,200,200))
+        text:SetWrap(true) text:SetAutoStretchVertical(true)
+        text:SetText(val)
+        text:SetWide(scroll:GetWide()-16)
+        text:SizeToContentsY()
+        pnl:SetTall(text:GetTall() + 24)
+    end
+
+    local btnBar = TDLib('DPanel', fr) btnBar:Dock(BOTTOM) btnBar:SetTall(48) btnBar:ClearPaint()
+    local close = TDLib('DButton', btnBar) close:Dock(RIGHT) close:SetWide(120) close:DockMargin(0,8,8,8)
+    close:ClearPaint(); btnNoText(close)
+    close.Paint = function(s,w,h) draw.RoundedBox(10,0,0,w,h, Color(47,49,54)) draw.SimpleText('Закрыть','font_sans_18',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
+    close.DoClick = function() fr:Close(); if IsValid(KPK._reportUI) then KPK._reportUI:Show() end end
+end
+
 local function buildReportsWindow()
     if IsValid(KPK._reportUI) then KPK._reportUI:Remove() end
     local sw, sh = ScrW(), ScrH()
@@ -258,6 +304,10 @@ local function buildReportsWindow()
         subp:Dock(BOTTOM) subp:SetTall(20) subp:DockMargin(10,0,10,6)
         subp:SetFont('font_sans_16') subp:SetTextColor(Color(200,200,200))
         subp:SetText(truncate(sub, 80))
+        local view = TDLib('DButton', pnl) view:Dock(RIGHT) view:SetWide(120) view:DockMargin(0,12,12,12)
+        view:ClearPaint(); btnNoText(view)
+        view.Paint = function(s,w,h) draw.RoundedBox(8,0,0,w,h, Color(88,101,242)) draw.SimpleText('Просмотреть','font_sans_16',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
+        view.DoClick = function() openReportView(r) end
     end
 end
 
@@ -268,6 +318,10 @@ end
 netstream.Hook('KPK::Report:List:OK', function(r)
     KPK._reports = r.reports or {}
     buildReportsWindow()
+end)
+
+netstream.Hook('KPK::Report:Get:OK', function(r)
+    if r and r.report then openReportView(r.report) end
 end)
 
 -- ===================================
@@ -709,6 +763,25 @@ netstream.Hook('KPK::Bootstrap:OK', function(payload)
             return row
         end
         -- ===== конец особого вида =====
+
+        if tostring(p.channel or '') == 'reports' then
+            local meta = util.JSONToTable(p.content or '{}') or {}
+            local def = REPORT_TYPES[meta.type or ''] or {}
+            local row = TDLib('DPanel', list) row:Dock(TOP) row:SetTall(40) row:DockMargin(10,8,10,0) row:ClearPaint()
+            if animated then row:SetAlpha(0) row:AlphaTo(255, 0.18, 0, nil) end
+            row._msg = p
+            row.Paint = function(s,w,h) draw.RoundedBox(8,0,0,w,h, Color(47,49,54)) end
+            local label = TDLib('DLabel', row) label:Dock(FILL) label:DockMargin(8,0,0,0)
+            local stamp = os.date('%d.%m %H:%M', tonumber(p.created_at or 0))
+            label:SetFont('font_sans_18') label:SetTextColor(Color(230,230,230))
+            label:SetText('['..stamp..'] '..tostring(def.name or meta.type or '')..' #'..tostring(meta.id or ''))
+            local btn = TDLib('DButton', row) btn:Dock(RIGHT) btn:SetWide(130) btn:DockMargin(8,8,8,8)
+            btn:ClearPaint(); btnNoText(btn)
+            btn.Paint = function(s,w,h) draw.RoundedBox(8,0,0,w,h, Color(88,101,242)) draw.SimpleText('Просмотреть','font_sans_16',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
+            btn.DoClick = function() netstream.Start('KPK::Report:Get', { id = tonumber(meta.id or 0) }) end
+            row:SizeToChildren(false, true)
+            return row
+        end
 
         -- обычные сообщения
         local row = TDLib('DPanel', list) row:Dock(TOP) row:SetTall(0) row:ClearPaint() row:DockMargin(10,8,10,0)

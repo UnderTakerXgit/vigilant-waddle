@@ -621,6 +621,7 @@ end)
 
 -- (функционал задач и авто-отчётов удалён)
 
+
 -- === ОТЧЁТЫ ===
 netstream.Hook('KPK::Report:List', function(ply)
     MySQLite.query('SELECT id,type,steam_id,data,created_at FROM kpk_reports ORDER BY id DESC LIMIT 50;', function(rows)

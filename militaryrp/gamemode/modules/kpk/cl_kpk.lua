@@ -208,7 +208,6 @@ local function openReportForm(key)
     cancel.DoClick = function() fr:Close(); if IsValid(KPK._reportUI) then KPK._reportUI:Show() end end
 end
 
-
 local function openReportView(r)
     if not istable(r) then return end
     local def = REPORT_TYPES[r.type or '']; if not def then return end

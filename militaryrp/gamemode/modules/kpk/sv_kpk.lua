@@ -637,10 +637,17 @@ end)
 netstream.Hook('KPK::Report:List', function(ply)
     local cat = NextRP.KPK.GetPlayerJobId and NextRP.KPK.GetPlayerJobId(ply) or ''
     MySQLite.query('SELECT id,type,steam_id,data,created_at FROM kpk_reports WHERE category='..MySQLite.SQLStr(cat)..' ORDER BY id DESC LIMIT 50;', function(rows)
+=======
+
+-- === ОТЧЁТЫ ===
+netstream.Hook('KPK::Report:List', function(ply)
+    local cat = NextRP.KPK.GetPlayerJobId and NextRP.KPK.GetPlayerJobId(ply) or ''
+    MySQLite.query('SELECT id,type,steam_id,data,created_at FROM kpk_reports WHERE category='..MySQLite.SQLStr(cat)..' ORDER BY id DESC LIMIT 50;', function(rows)
 
 -- === ОТЧЁТЫ ===
 netstream.Hook('KPK::Report:List', function(ply)
     MySQLite.query('SELECT id,type,steam_id,data,created_at FROM kpk_reports ORDER BY id DESC LIMIT 50;', function(rows)
+
         netstream.Start(ply, 'KPK::Report:List:OK', { reports = rows or {} })
     end)
 end)
@@ -683,6 +690,17 @@ netstream.Hook('KPK::Report:Create', function(ply, data)
             end)
             netstream.Start(ply, 'KPK::Report:Create:OK')
         end)
+
+    end)
+end)
+
+netstream.Hook('KPK::Report:Get', function(ply, data)
+    local id = tonumber(data and data.id or 0) or 0
+    if id <= 0 then return end
+    local cat = NextRP.KPK.GetPlayerJobId and NextRP.KPK.GetPlayerJobId(ply) or ''
+    MySQLite.query('SELECT id,type,steam_id,category,data,created_at FROM kpk_reports WHERE id='..id..' AND category='..MySQLite.SQLStr(cat)..' LIMIT 1;', function(rows)
+        netstream.Start(ply, 'KPK::Report:Get:OK', { report = rows and rows[1] or nil })
+=======
     end)
 end)
 

@@ -53,6 +53,16 @@ local function createTables()
         );
     ]])
 
+    MySQLite.query([[
+        CREATE TABLE IF NOT EXISTS kpk_reports(
+            id ]]..idCol..[[,
+            type VARCHAR(16),
+            steam_id VARCHAR(25),
+            data TEXT,
+            created_at INT
+        );
+    ]])
+
     -- Индексы
     MySQLite.query([[CREATE INDEX IF NOT EXISTS idx_kpk_messages_cat_ch_id ON kpk_messages(category, channel, id);]])
     MySQLite.query([[CREATE INDEX IF NOT EXISTS idx_kpk_messages_created_at ON kpk_messages(created_at);]])
@@ -610,3 +620,27 @@ netstream.Hook('KPK::Pin:Clear', function(ply, data)
 end)
 
 -- (функционал задач и авто-отчётов удалён)
+
+
+-- === ОТЧЁТЫ ===
+netstream.Hook('KPK::Report:List', function(ply)
+    MySQLite.query('SELECT id,type,steam_id,data,created_at FROM kpk_reports ORDER BY id DESC LIMIT 50;', function(rows)
+        netstream.Start(ply, 'KPK::Report:List:OK', { reports = rows or {} })
+    end)
+end)
+
+netstream.Hook('KPK::Report:Create', function(ply, data)
+    if not istable(data) then return end
+    local t = tostring(data.type or '')
+    if t == '' then return end
+    local payload = util.TableToJSON(data.fields or {}, true)
+    MySQLite.query(string.format(
+        "INSERT INTO kpk_reports(type,steam_id,data,created_at) VALUES(%s,%s,%s,%d);",
+        MySQLite.SQLStr(t),
+        MySQLite.SQLStr(ply:SteamID()),
+        MySQLite.SQLStr(payload),
+        now()
+    ), function()
+        netstream.Start(ply, 'KPK::Report:Create:OK')
+    end)
+end)

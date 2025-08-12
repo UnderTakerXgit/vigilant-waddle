@@ -18,6 +18,46 @@ KPK._drafts     = KPK._drafts or {}
 KPK._annCounts  = KPK._annCounts or {}  -- message_id -> count
 KPK._annMine    = KPK._annMine or {}    -- message_id -> true
 KPK._mode       = KPK._mode or 'chat'   -- только чат-режим
+KPK._reports    = KPK._reports or {}
+KPK._reportUI   = nil
+
+local REPORT_TYPES = {
+    aar = {
+        name = 'Боевой отчёт',
+        fields = {
+            { key='time_place', name='Время и место операции' },
+            { key='goal',       name='Цель' },
+            { key='team',       name='Состав группы' },
+            { key='course',     name='Ход выполнения' },
+            { key='losses',     name='Потери (личного состава, техники)' },
+            { key='contact',    name='Контакт с противником' },
+            { key='result',     name='Итог операции' },
+            { key='recs',       name='Рекомендации' }
+        }
+    },
+    med = {
+        name = 'Медицинский отчёт',
+        fields = {
+            { key='date_place', name='Дата и место инцидента' },
+            { key='fighter',    name='Имя/позывной бойца' },
+            { key='injury',     name='Характер ранения или заражения' },
+            { key='aid',        name='Оказанная помощь' },
+            { key='status',     name='Статус бойца (в строю, госпиталь, умер)' }
+        }
+    },
+    special = {
+        name = 'Специальный отчёт',
+        fields = {
+            { key='title',      name='Заголовок' },
+            { key='datetime',   name='Дата / Время' },
+            { key='author',     name='Автор' },
+            { key='place',      name='Место' },
+            { key='desc',       name='Описание', multiline=true },
+            { key='outcome',    name='Вывод / Рекомендации', multiline=true },
+            { key='priority',   name='Приоритет', combo={'Низкий','Средний','Высокий','Критический'} }
+        }
+    }
+}
 
 local function keyFor(cat, ch) return tostring(cat or '') .. '/' .. tostring(ch or '') end
 local function table_count(t) local n=0 for _ in pairs(t or {}) do n=n+1 end return n end
@@ -108,6 +148,128 @@ local function buildLinkPreview(parent, url)
     return wrap
 end
 
+-- ========== Отчётность ==========
+local function openReportForm(key)
+    local def = REPORT_TYPES[key]; if not def then return end
+    if IsValid(KPK._reportUI) then KPK._reportUI:Hide() end
+
+    local fr = TDLib('DFrame')
+    fr:SetSize(480, 600)
+    fr:Center()
+    fr:MakePopup()
+    fr:SetTitle('')
+    fr:ShowCloseButton(false)
+    fr.Paint = function(s,w,h)
+        Derma_DrawBackgroundBlur(s, s.m_fCreateTime or SysTime())
+        draw.RoundedBox(16,0,0,w,h, Color(40,43,48,230))
+    end
+    local title = TDLib('DPanel', fr) title:Dock(TOP) title:SetTall(48) title:ClearPaint()
+    title:Text(def.name, 'font_sans_24', Color(255,255,255), TEXT_ALIGN_CENTER, 0)
+
+    local scroll = TDLib('DScrollPanel', fr) scroll:Dock(FILL) scroll:ClearPaint()
+    local controls = {}
+    for _, f in ipairs(def.fields or {}) do
+        local pnl = TDLib('DPanel', scroll)
+        pnl:Dock(TOP) pnl:SetTall(f.multiline and 100 or 40) pnl:DockMargin(8,4,8,0)
+        pnl:ClearPaint()
+        local lbl = TDLib('DLabel', pnl)
+        lbl:Dock(TOP) lbl:SetTall(20) lbl:SetText(f.name or '')
+        lbl:SetFont('font_sans_18') lbl:SetTextColor(Color(255,255,255))
+        if f.combo then
+            local cb = vgui.Create('DComboBox', pnl)
+            cb:Dock(FILL)
+            for _, opt in ipairs(f.combo) do cb:AddChoice(opt) end
+            cb:SetValue(f.combo[1])
+            controls[f.key] = cb
+        else
+            local te = vgui.Create('DTextEntry', pnl)
+            te:Dock(FILL) te:SetMultiline(f.multiline and true or false)
+            controls[f.key] = te
+        end
+    end
+
+    local btnBar = TDLib('DPanel', fr) btnBar:Dock(BOTTOM) btnBar:SetTall(48) btnBar:ClearPaint()
+    local okBtn = TDLib('DButton', btnBar) okBtn:Dock(RIGHT) okBtn:SetWide(150) okBtn:DockMargin(0,8,8,8)
+    okBtn:ClearPaint(); btnNoText(okBtn)
+    okBtn.Paint = function(s,w,h) draw.RoundedBox(10,0,0,w,h, Color(88,101,242)) draw.SimpleText('Отправить','font_sans_18',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
+    okBtn.DoClick = function()
+        local payload = {}
+        for k,v in pairs(controls) do
+            if v.GetValue then payload[k] = v:GetValue() end
+        end
+        netstream.Start('KPK::Report:Create', { type=key, fields=payload })
+        fr:Close()
+        if IsValid(KPK._reportUI) then timer.Simple(0.1, function() netstream.Start('KPK::Report:List') end) end
+    end
+
+    local cancel = TDLib('DButton', btnBar) cancel:Dock(RIGHT) cancel:SetWide(120) cancel:DockMargin(0,8,8,8)
+    cancel:ClearPaint(); btnNoText(cancel)
+    cancel.Paint = function(s,w,h) draw.RoundedBox(10,0,0,w,h, Color(47,49,54)) draw.SimpleText('Отмена','font_sans_18',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
+    cancel.DoClick = function() fr:Close(); if IsValid(KPK._reportUI) then KPK._reportUI:Show() end end
+end
+
+local function buildReportsWindow()
+    if IsValid(KPK._reportUI) then KPK._reportUI:Remove() end
+    local sw, sh = ScrW(), ScrH()
+    local frame = TDLib('DFrame')
+    frame:SetSize(math.min(800, sw*0.8), math.min(600, sh*0.8))
+    frame:Center()
+    frame:MakePopup()
+    frame:SetTitle('')
+    frame:ShowCloseButton(false)
+    frame.Paint = function(s,w,h)
+        Derma_DrawBackgroundBlur(s, s.m_fCreateTime or SysTime())
+        draw.RoundedBox(16,0,0,w,h, Color(40,43,48,230))
+    end
+    frame.OnRemove = function() KPK._reportUI = nil end
+    KPK._reportUI = frame
+
+    local title = TDLib('DPanel', frame) title:Dock(TOP) title:SetTall(52) title:ClearPaint()
+    title:Text('Отчётность', 'font_sans_24', Color(255,255,255), TEXT_ALIGN_LEFT, 10)
+
+    local createBtn = TDLib('DButton', title)
+    createBtn:Dock(RIGHT) createBtn:SetWide(160) createBtn:DockMargin(0,8,8,8)
+    createBtn:ClearPaint(); btnNoText(createBtn)
+    createBtn.Paint = function(s,w,h) draw.RoundedBox(10,0,0,w,h, Color(88,101,242)) draw.SimpleText('Создать отчёт','font_sans_18',w/2,h/2,Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER) end
+    createBtn.DoClick = function()
+        local menu = DermaMenu()
+        for k, v in pairs(REPORT_TYPES) do
+            menu:AddOption(v.name, function() openReportForm(k) end)
+        end
+        menu:Open()
+    end
+
+    local scroll = TDLib('DScrollPanel', frame)
+    scroll:Dock(FILL) scroll:ClearPaint()
+
+    for _, r in ipairs(KPK._reports or {}) do
+        local data = util.JSONToTable(r.data or '{}') or {}
+        local pnl = TDLib('DPanel', scroll)
+        pnl:Dock(TOP) pnl:SetTall(64) pnl:DockMargin(8,4,8,0)
+        pnl:ClearPaint()
+        pnl.Paint = function(s,w,h) draw.RoundedBox(10,0,0,w,h, Color(47,49,54)) end
+        local ttl = REPORT_TYPES[r.type or ''] and REPORT_TYPES[r.type or ''].name or (r.type or '')
+        local sub = ''
+        if r.type == 'special' then sub = data.title or ''
+        elseif r.type == 'aar' then sub = data.goal or ''
+        elseif r.type == 'med' then sub = data.fighter or '' end
+        pnl:Text((ttl or '')..' #'..tostring(r.id or ''), 'font_sans_18', Color(255,255,255), TEXT_ALIGN_LEFT, 10)
+        local subp = TDLib('DLabel', pnl)
+        subp:Dock(BOTTOM) subp:SetTall(20) subp:DockMargin(10,0,10,6)
+        subp:SetFont('font_sans_16') subp:SetTextColor(Color(200,200,200))
+        subp:SetText(truncate(sub, 80))
+    end
+end
+
+local function OpenReports()
+    netstream.Start('KPK::Report:List')
+end
+
+netstream.Hook('KPK::Report:List:OK', function(r)
+    KPK._reports = r.reports or {}
+    buildReportsWindow()
+end)
+
 -- ===================================
 
 local function OpenKPK()
@@ -179,6 +341,15 @@ netstream.Hook('KPK::Bootstrap:OK', function(payload)
     callsignLine:Text(callsignTxt, 'font_sans_16', Color(180,180,186), TEXT_ALIGN_LEFT, 8)
 
     local catsScroll = TDLib('DScrollPanel', left) catsScroll:Dock(FILL) catsScroll:ClearPaint()
+
+    -- кнопка отчётности
+    local reportBar = TDLib('DPanel', left) reportBar:Dock(BOTTOM) reportBar:SetTall(52) reportBar:ClearPaint()
+    local reportBtn = TDLib('DButton', reportBar) reportBtn:Dock(FILL) reportBtn:DockMargin(8,8,8,0) reportBtn:ClearPaint(); btnNoText(reportBtn)
+    reportBtn.Paint = function(s,w,h)
+        draw.RoundedBox(10,0,0,w,h, Color(48,51,57))
+        draw.SimpleText('📄  Отчётность', 'font_sans_18', w/2, h/2, Color(255,255,255), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+    end
+    reportBtn.DoClick = OpenReports
 
     -- нижняя «шестерёнка» (инструменты/интеграции)
     local gearBar = TDLib('DPanel', left) gearBar:Dock(BOTTOM) gearBar:SetTall(52) gearBar:ClearPaint()

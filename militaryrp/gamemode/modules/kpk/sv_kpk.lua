@@ -637,6 +637,10 @@ end)
 netstream.Hook('KPK::Report:List', function(ply)
     local cat = NextRP.KPK.GetPlayerJobId and NextRP.KPK.GetPlayerJobId(ply) or ''
     MySQLite.query('SELECT id,type,steam_id,data,created_at FROM kpk_reports WHERE category='..MySQLite.SQLStr(cat)..' ORDER BY id DESC LIMIT 50;', function(rows)
+
+-- === ОТЧЁТЫ ===
+netstream.Hook('KPK::Report:List', function(ply)
+    MySQLite.query('SELECT id,type,steam_id,data,created_at FROM kpk_reports ORDER BY id DESC LIMIT 50;', function(rows)
         netstream.Start(ply, 'KPK::Report:List:OK', { reports = rows or {} })
     end)
 end)
@@ -688,5 +692,16 @@ netstream.Hook('KPK::Report:Get', function(ply, data)
     local cat = NextRP.KPK.GetPlayerJobId and NextRP.KPK.GetPlayerJobId(ply) or ''
     MySQLite.query('SELECT id,type,steam_id,category,data,created_at FROM kpk_reports WHERE id='..id..' AND category='..MySQLite.SQLStr(cat)..' LIMIT 1;', function(rows)
         netstream.Start(ply, 'KPK::Report:Get:OK', { report = rows and rows[1] or nil })
+    end)
+end)
+    local payload = util.TableToJSON(data.fields or {}, true)
+    MySQLite.query(string.format(
+        "INSERT INTO kpk_reports(type,steam_id,data,created_at) VALUES(%s,%s,%s,%d);",
+        MySQLite.SQLStr(t),
+        MySQLite.SQLStr(ply:SteamID()),
+        MySQLite.SQLStr(payload),
+        now()
+    ), function()
+        netstream.Start(ply, 'KPK::Report:Create:OK')
     end)
 end)
